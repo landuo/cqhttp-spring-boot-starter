@@ -13,4 +13,6 @@ public @interface Command {
 
     String sample() default "";
 
+    boolean allowGroupMsg() default true;
+
 }

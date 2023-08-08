@@ -39,4 +39,6 @@ public class QuickReply {
      */
     private Integer banDuration;
 
+    private Boolean approve;
+
 }
