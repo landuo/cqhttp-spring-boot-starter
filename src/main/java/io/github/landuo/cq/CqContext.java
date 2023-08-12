@@ -7,8 +7,8 @@ import io.github.landuo.cq.annotations.Command;
 import io.github.landuo.cq.annotations.Listener;
 import io.github.landuo.cq.annotations.MsgType;
 import io.github.landuo.cq.msg.common.BaseMsg;
+import io.github.landuo.cq.msg.common.MessageMsg;
 import jakarta.annotation.PostConstruct;
-import lombok.Data;
 import org.springframework.beans.BeansException;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ApplicationContext;
@@ -20,17 +20,31 @@ import java.util.*;
 /**
  * @author accidia
  */
-@Data
 public class CqContext implements ApplicationContextAware {
-    private Map<String, Class<?>> msgMap = new HashMap<>();
-    private Map<String, Method> commandMethods = new HashMap<>();
-    private Map<String, String> commandDesc = new HashMap<>();
-    private Map<String, Method> listenerMethods = new HashMap<>();
+    private final Map<String, Class<?>> msgMap = new HashMap<>();
+    private final Map<String, Method> commandMethods = new HashMap<>();
+    private final Map<String, String> commandDesc = new HashMap<>();
+    private final Map<String, Method> listenerMethods = new HashMap<>();
     public final static ThreadLocal<BaseMsg> ORIGIN_MSG = new ThreadLocal<>();
 
-    public Method getCommandMethod(String command) {
-        Optional<String> optional = commandMethods.keySet().stream().filter(command::startsWith).findFirst();
-        return optional.map(s -> commandMethods.get(s)).orElse(null);
+    public Method getCommandMethod() {
+        BaseMsg baseMsg = ORIGIN_MSG.get();
+        if (baseMsg instanceof MessageMsg messageMsg) {
+            String command = messageMsg.getMessage().trim();
+            Optional<String> optional = commandMethods.keySet().stream().filter(command::startsWith).findFirst();
+            return commandMethods.get(optional.orElseThrow(() -> new CQException("无此命令")));
+        }
+        return null;
+    }
+
+    public Command getCommand() {
+        Method method = getCommandMethod();
+        return method.getAnnotation(Command.class);
+    }
+
+    public Method getListenerMethod() {
+        BaseMsg msg = ORIGIN_MSG.get();
+        return listenerMethods.getOrDefault(msg.getClass().getName(), null);
     }
 
     @Command(value = "/help")
@@ -92,10 +106,15 @@ public class CqContext implements ApplicationContextAware {
         });
     }
 
-    public <T extends BaseMsg> T getOriginMessage(String body) {
+    public <T extends BaseMsg> T getMsg(String body) {
         Map param = JSONUtil.toBean(body, Map.class);
         StringBuilder stringBuilder = new StringBuilder();
-        stringBuilder.append(param.getOrDefault("post_type", "NULL").toString().replace("_sent", "")).append(":").append(param.getOrDefault("message_type", "NULL").toString().toLowerCase()).append(":").append(param.getOrDefault("request_type", "NULL").toString()).append(":").append(param.getOrDefault("notice_type", "NULL").toString()).append(":").append(param.getOrDefault("notice_sub_type", "NULL").toString()).append(":").append(param.getOrDefault("meta_event_type", "NULL").toString());
+        stringBuilder.append(param.getOrDefault("post_type", "NULL").toString().replace("_sent", "")).append(":")
+                .append(param.getOrDefault("message_type", "NULL").toString().toLowerCase()).append(":")
+                .append(param.getOrDefault("request_type", "NULL").toString()).append(":")
+                .append(param.getOrDefault("notice_type", "NULL").toString()).append(":")
+                .append(param.getOrDefault("notice_sub_type", "NULL").toString()).append(":")
+                .append(param.getOrDefault("meta_event_type", "NULL").toString());
         if (msgMap.containsKey(stringBuilder.toString())) {
             return (T) JSONUtil.toBean(body, msgMap.get(stringBuilder.toString()));
         } else {

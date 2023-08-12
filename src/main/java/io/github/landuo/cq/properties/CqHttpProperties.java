@@ -11,6 +11,5 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class CqHttpProperties {
     private String ip;
     private Integer port;
-    private String endPoint = "/cq";
-
+    private String endPoint;
 }

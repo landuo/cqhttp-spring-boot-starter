@@ -10,8 +10,13 @@ import io.github.landuo.cq.msg.common.MessageMsg;
 import io.github.landuo.cq.msg.message.GroupMessageMsg;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.util.MethodInvoker;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -23,23 +28,27 @@ import java.util.Map;
  */
 @Data
 @Slf4j
-public class CQController {
+@RestController
+public class CQController implements ApplicationContextAware {
+    @Autowired
     private CqContext cqContext;
-    private ApplicationContext applicationContext;
+    private ApplicationContext ctx;
 
-    public Object handle() {
+    @Override
+    public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
+        this.ctx = applicationContext;
+    }
+
+    @PostMapping("${cqhttp.end-point}")
+    public QuickReply test() {
         BaseMsg msg = CqContext.ORIGIN_MSG.get();
         if (msg instanceof MessageMsg messageMsg) {
             String[] split = messageMsg.getMessage().split("\\s+");
-            Method method = cqContext.getCommandMethod(messageMsg.getMessage());
-            if (method == null) {
-                return null;
-//                return QuickReply.builder().reply("无此命令").atSender(true).build();
-            }
-            Command command = method.getAnnotation(Command.class);
+            Method method = cqContext.getCommandMethod();
+            Command command = cqContext.getCommand();
             // 不允许群聊且消息是群聊的时候
             if (!command.allowGroupMsg() && messageMsg instanceof GroupMessageMsg) {
-                return QuickReply.builder().reply("该命令不允许群聊").atSender(true).build();
+                throw new CQException("指令: " + command.value() + " 不允许群聊");
             }
             int parameterCount = method.getParameterCount();
             Object[] params = new Object[parameterCount];
@@ -52,12 +61,12 @@ public class CQController {
                     if (type.isAnnotationPresent(MsgType.class)) {
                         // 参数不是MessageMsg且在群聊使用私聊命令(或在私聊使用群聊命令)
                         if (!type.getName().equalsIgnoreCase(msg.getClass().getName()) && !type.getName().equalsIgnoreCase(MessageMsg.class.getName())) {
-                            return QuickReply.builder().reply("该命令不允许在此使用").atSender(true).build();
+                            throw new CQException("指令: " + command.value() + " 不允许在此使用");
                         }
                         param = msg;
                     } else {
                         if (parameterCount > (split.length - 1)) {
-                            return QuickReply.builder().reply("参数不足, 请重新输入.例子: " + cqContext.getCommandDesc().get(split[0])).atSender(true).build();
+                            throw new CQException("参数不足, 请重新输入.例子: " + command.sample());
                         }
                         // 基本数据类型包装类时可使用
                         Constructor<?> constructor = type.getConstructor(String.class);
@@ -67,17 +76,21 @@ public class CQController {
                 }
             } catch (NoSuchMethodException | InvocationTargetException | InstantiationException |
                      IllegalAccessException e) {
-                return QuickReply.builder().reply("系统报错: " + e.getCause().getMessage()).atSender(true).build();
+                if (e instanceof InvocationTargetException exception) {
+                    throw new CQException(exception.getCause().getMessage(), exception.getCause());
+                } else {
+                    throw new CQException(e.getMessage());
+                }
+
             }
-            return invoke(applicationContext.getBean(method.getDeclaringClass()), method.getName(), params);
+            return invoke(ctx.getBean(method.getDeclaringClass()), method.getName(), params);
         }
 
-        Map<String, Method> listeners = cqContext.getListenerMethods();
-        Method method = listeners.getOrDefault(msg.getClass().getName(), null);
-        if (method == null) {
+        Method listenerMethod = cqContext.getListenerMethod();
+        if (listenerMethod == null) {
             return null;
         }
-        return invoke(applicationContext.getBean(method.getDeclaringClass()), method.getName(), msg);
+        return invoke(ctx.getBean(listenerMethod.getDeclaringClass()), listenerMethod.getName(), msg);
     }
 
     private QuickReply invoke(Object targetObject, String targetMethod, Object... param) {
@@ -89,9 +102,11 @@ public class CQController {
             invoker.prepare();
             Object result = invoker.invoke();
             return QuickReply.builder().reply(result != null ? result.toString() : null).atSender(true).build();
-        } catch (ClassNotFoundException | NoSuchMethodException | InvocationTargetException |
-                 IllegalAccessException e) {
-            return QuickReply.builder().reply("系统报错: " + e.getCause().getMessage()).atSender(true).build();
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new RuntimeException(e.getMessage());
+        } catch (InvocationTargetException e) {
+            throw new RuntimeException(e.getCause().getMessage(), e.getCause());
         }
     }
+
 }
